@@ -1,0 +1,6 @@
+requests==2.31.0
+beautifulsoup4==4.12.2
+pytz==2023.3
+flask==3.0.0
+line-bot-sdk==3.5.0
+gunicorn==21.2.0
