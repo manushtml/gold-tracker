@@ -7,6 +7,9 @@ on:
   # 允許手動觸發，方便測試
   workflow_dispatch:
 
+permissions:
+  contents: write  # 允許推送 price_history.json 回儲存庫
+
 jobs:
   notify:
     runs-on: ubuntu-latest
@@ -14,6 +17,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,3 +37,11 @@ jobs:
           TARGET_PRICE: ${{ secrets.TARGET_PRICE }}
         run: |
           python gold_tracker_bot.py
+
+      - name: Commit and push price history
+        run: |
+          git config --global user.name "Gold Tracker Bot"
+          git config --global user.email "bot@gold-tracker.com"
+          git add price_history.json data.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: update price history [skip ci]"
+          git push || true
