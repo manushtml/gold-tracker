@@ -7,7 +7,6 @@ import requests
 from flask import Flask, request, abort
 from gold_tracker_bot import (
     get_current_price,
-    get_previous_close,
     get_history_prices,
     load_data,
     save_data,
