@@ -8,6 +8,7 @@ import pytz
 # Line Bot API 設定（從環境變數讀取）
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', '')
 LINE_GROUP_ID = os.environ.get('LINE_GROUP_ID', '')
+TARGET_PRICE_ENV = os.environ.get('TARGET_PRICE', '')
 
 # 資料儲存檔案（記錄目標價格與群組 ID）
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data.json')
@@ -18,7 +19,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
-    return {'target_price': 2600, 'group_ids': []}
+    return {'target_price': 3500, 'group_ids': []}
 
 
 def save_data(data):
@@ -120,7 +121,14 @@ def build_daily_report():
     current_price = get_current_price()
     prev_date, prev_price = get_previous_close()
     data = load_data()
-    target_price = data.get('target_price', 2600)
+    # 優先使用環境變數中的目標價格，其次使用 data.json 中的設定
+    if TARGET_PRICE_ENV:
+        try:
+            target_price = int(TARGET_PRICE_ENV)
+        except ValueError:
+            target_price = data.get('target_price', 3500)
+    else:
+        target_price = data.get('target_price', 3500)
 
     if not current_price or not prev_price:
         return "無法取得金價資料，請稍後再試。"

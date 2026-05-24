@@ -81,7 +81,7 @@ def handle_text_message(event: dict):
     # 指令：查詢狀態
     if text in ['/status', '查詢狀態', '/狀態']:
         data = load_data()
-        target_price = data.get('target_price', 2600)
+        target_price = data.get('target_price', 3500)
         current_price = get_current_price()
         reply_text = "【目前狀態】\n"
         reply_text += f"目標買進價：{target_price} 元/公克\n"
@@ -104,7 +104,7 @@ def handle_text_message(event: dict):
                 reply_text = "價格設定範圍需在 100 ~ 99999 元之間，請重新輸入。"
             else:
                 data = load_data()
-                old_price = data.get('target_price', 2600)
+                old_price = data.get('target_price', 3500)
                 data['target_price'] = new_price
                 save_data(data)
                 reply_text = f"目標買進價格已更新！\n{old_price} 元 → {new_price} 元/公克"
@@ -116,7 +116,7 @@ def handle_text_message(event: dict):
         current_price = get_current_price()
         if current_price:
             data = load_data()
-            target_price = data.get('target_price', 2600)
+            target_price = data.get('target_price', 3500)
             diff = current_price - target_price
             reply_text = f"台銀黃金存摺即時賣出價\n{current_price} 元/公克\n"
             if diff <= 0:
