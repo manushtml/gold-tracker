@@ -2,8 +2,8 @@ name: Daily Gold Price Tracker
 
 on:
   schedule:
-    # UTC 07:00 = 台灣時間 15:00，週一至週五執行
-    - cron: '0 7 * * 1-5'
+    # UTC 04:00 = 台灣時間 12:00，週一至週五執行
+    - cron: '0 4 * * 1-5'
   # 允許手動觸發，方便測試
   workflow_dispatch:
 
