@@ -331,6 +331,24 @@ def callback():
     return 'OK', 200
 
 
+@app.route("/notify", methods=['GET', 'POST'])
+def notify():
+    """每日通知端點，供 Railway Cron Job 呼叫"""
+    # 簡單的安全驗證（可選）
+    secret = request.args.get('secret', '') or request.headers.get('X-Notify-Secret', '')
+    notify_secret = os.environ.get('NOTIFY_SECRET', '')
+    if notify_secret and secret != notify_secret:
+        return 'Unauthorized', 401
+
+    try:
+        from gold_tracker_bot import run_daily_notify
+        run_daily_notify()
+        return 'OK', 200
+    except Exception as e:
+        print(f"[錯誤] 執行每日通知失敗: {e}")
+        return f'Error: {e}', 500
+
+
 @app.route("/health", methods=['GET'])
 def health():
     """健康檢查端點"""
