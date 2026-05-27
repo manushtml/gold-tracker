@@ -9,6 +9,7 @@ import pytz
 from flask import Flask, request, abort
 from gold_tracker_bot import (
     get_current_price,
+    get_buy_back_price,
     get_history_prices,
     load_data,
     save_data,
@@ -52,8 +53,8 @@ def reply_message(reply_token: str, text: str):
         print(f"[錯誤] 回覆訊息例外: {e}")
 
 
-def build_portfolio_report(current_price):
-    """計算並組合持倉報告"""
+def build_portfolio_report(sell_price, buy_back_price):
+    """計算並組合持倉報告（損益以本行買入價/回售價計算）"""
     data = load_data()
     purchases = data.get('purchases', [])
 
@@ -72,9 +73,9 @@ def build_portfolio_report(current_price):
     total_cost = sum(p['price'] * p['grams'] for p in purchases)
     avg_cost = total_cost / total_grams if total_grams > 0 else 0
 
-    # 當前市值（以即時賣出價計算）
-    current_value = current_price * total_grams
-    profit = current_value - total_cost
+    # 損益以本行買入價（回售價）計算——代表現在賣出能拿到的金額
+    buyback_value = buy_back_price * total_grams
+    profit = buyback_value - total_cost
     profit_rate = (profit / total_cost * 100) if total_cost > 0 else 0
 
     tw_tz = pytz.timezone('Asia/Taipei')
@@ -87,15 +88,16 @@ def build_portfolio_report(current_price):
     msg += f"平均成本：{avg_cost:,.0f} 元/公克\n"
     msg += f"總投入成本：{total_cost:,.0f} 元\n"
     msg += "─────────────────\n"
-    msg += f"當前賣出價：{current_price:,} 元/公克\n"
-    msg += f"當前市值：{current_value:,.0f} 元\n"
+    msg += f"本行賣出價：{sell_price:,} 元/公克\n"
+    msg += f"本行買入價：{buy_back_price:,} 元/公克\n"
+    msg += f"回售市值：{buyback_value:,.0f} 元\n"
     msg += "─────────────────\n"
 
     if profit >= 0:
-        msg += f"獲利金額：+{profit:,.0f} 元\n"
+        msg += f"損益：+{profit:,.0f} 元\n"
         msg += f"投資報酬率：+{profit_rate:.2f}%"
     else:
-        msg += f"虧損金額：{profit:,.0f} 元\n"
+        msg += f"損益：{profit:,.0f} 元\n"
         msg += f"投資報酬率：{profit_rate:.2f}%"
 
     return msg
@@ -238,9 +240,10 @@ def handle_text_message(event: dict):
 
     # 指令：查詢持倉報告
     elif text in ['/portfolio', '持倉', '/持倉', '查詢持倉']:
-        current_price = get_current_price()
-        if current_price:
-            reply_text = build_portfolio_report(current_price)
+        sell_price = get_current_price()
+        buy_back_price = get_buy_back_price()
+        if sell_price and buy_back_price:
+            reply_text = build_portfolio_report(sell_price, buy_back_price)
         else:
             reply_text = "無法取得當前金價，請稍後再試。"
 

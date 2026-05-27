@@ -44,6 +44,27 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False, indent=4)
 
 
+def get_buy_back_price():
+    """爬取台銀黃金存摺當前本行買入價（回售價，新台幣/公克）"""
+    url = "https://rate.bot.com.tw/gold?Lang=zh-TW"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        prices = soup.find_all("td", class_="text-right")
+        if len(prices) >= 2:
+            # 第二個為本行買入價（回售價）
+            raw = prices[1].text.replace(',', '').replace('\r', '').replace('\n', '').strip()
+            number_part = raw.split()[0] if raw.split() else raw
+            return int(number_part)
+    except Exception as e:
+        print(f"[錯誤] 抓取買入價失敗: {e}")
+    return None
+
+
 def get_current_price():
     """爬取台銀黃金存摺當前本行賣出價（新台幣/公克）"""
     url = "https://rate.bot.com.tw/gold?Lang=zh-TW"
