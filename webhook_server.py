@@ -7,6 +7,8 @@ import requests
 from datetime import datetime
 import pytz
 from flask import Flask, request, abort
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from gold_tracker_bot import (
     get_current_price,
     get_buy_back_price,
@@ -14,7 +16,8 @@ from gold_tracker_bot import (
     load_data,
     save_data,
     send_line_message,
-    build_daily_report
+    build_daily_report,
+    run_daily_notify
 )
 
 app = Flask(__name__)
@@ -229,7 +232,7 @@ def handle_text_message(event: dict):
                 f"─────────────────\n"
                 f"輸入 /portfolio 查看持倉報告"
             )
-        except (IndexError, ValueError) as e:
+        except (IndexError, ValueError):
             reply_text = (
                 "格式錯誤，請使用：\n"
                 "/buy [單價] [公克數]\n\n"
@@ -333,15 +336,13 @@ def callback():
 
 @app.route("/notify", methods=['GET', 'POST'])
 def notify():
-    """每日通知端點，供 Railway Cron Job 呼叫"""
-    # 簡單的安全驗證（可選）
+    """每日通知端點，供手動呼叫或測試"""
     secret = request.args.get('secret', '') or request.headers.get('X-Notify-Secret', '')
     notify_secret = os.environ.get('NOTIFY_SECRET', '')
     if notify_secret and secret != notify_secret:
         return 'Unauthorized', 401
 
     try:
-        from gold_tracker_bot import run_daily_notify
         run_daily_notify()
         return 'OK', 200
     except Exception as e:
@@ -353,6 +354,26 @@ def notify():
 def health():
     """健康檢查端點"""
     return 'OK', 200
+
+
+def start_scheduler():
+    """啟動內建排程器，每天台灣時間中午 12:00（UTC 04:00）自動發送通知"""
+    scheduler = BackgroundScheduler(timezone=pytz.utc)
+    # 每天 UTC 04:00 = 台灣時間 12:00，週一至週五
+    scheduler.add_job(
+        func=run_daily_notify,
+        trigger=CronTrigger(hour=4, minute=0, day_of_week='mon-fri', timezone=pytz.utc),
+        id='daily_gold_notify',
+        name='每日黃金通知',
+        replace_existing=True
+    )
+    scheduler.start()
+    print("[排程] 內建排程器已啟動：每天台灣時間 12:00（週一至週五）自動發送通知")
+    return scheduler
+
+
+# 啟動排程器（在 gunicorn 環境中也能正常運作）
+scheduler = start_scheduler()
 
 
 if __name__ == "__main__":
