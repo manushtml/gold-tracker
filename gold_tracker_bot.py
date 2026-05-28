@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
@@ -10,13 +11,92 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', '')
 LINE_GROUP_ID = os.environ.get('LINE_GROUP_ID', '')
 TARGET_PRICE_ENV = os.environ.get('TARGET_PRICE', '')
 
-# 資料儲存檔案
+# GitHub API 設定（用於持久化儲存）
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
+GITHUB_REPO = os.environ.get('GITHUB_REPO', 'manushtml/gold-tracker')
+GITHUB_BRANCH = os.environ.get('GITHUB_BRANCH', 'main')
+
+# 本地資料儲存檔案（暫存用，重啟後清空）
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data.json')
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'price_history.json')
 
 
+# ─── GitHub 持久化儲存（進貨記錄） ───────────────────────────────────────────
+
+def _github_get_file(path):
+    """從 GitHub 讀取檔案內容，回傳 (content_dict, sha)"""
+    if not GITHUB_TOKEN:
+        return None, None
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    try:
+        resp = requests.get(url, headers=headers, params={"ref": GITHUB_BRANCH}, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            content = base64.b64decode(data['content']).decode('utf-8')
+            return json.loads(content), data['sha']
+        elif resp.status_code == 404:
+            return None, None
+    except Exception as e:
+        print(f"[錯誤] GitHub 讀取 {path} 失敗: {e}")
+    return None, None
+
+
+def _github_put_file(path, content_dict, sha=None, message="update data"):
+    """將資料寫入 GitHub 檔案"""
+    if not GITHUB_TOKEN:
+        return False
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    content_bytes = json.dumps(content_dict, ensure_ascii=False, indent=2).encode('utf-8')
+    payload = {
+        "message": message,
+        "content": base64.b64encode(content_bytes).decode('utf-8'),
+        "branch": GITHUB_BRANCH
+    }
+    if sha:
+        payload["sha"] = sha
+    try:
+        resp = requests.put(url, headers=headers, json=payload, timeout=15)
+        if resp.status_code in (200, 201):
+            return True
+        else:
+            print(f"[錯誤] GitHub 寫入 {path} 失敗 ({resp.status_code}): {resp.text[:200]}")
+    except Exception as e:
+        print(f"[錯誤] GitHub 寫入 {path} 例外: {e}")
+    return False
+
+
+def load_purchases():
+    """從 GitHub 讀取進貨記錄（持久化）"""
+    data, _ = _github_get_file("data/purchases.json")
+    if data is not None:
+        return data.get('purchases', [])
+    return []
+
+
+def save_purchases(purchases):
+    """將進貨記錄寫入 GitHub（持久化）"""
+    existing, sha = _github_get_file("data/purchases.json")
+    content = {'purchases': purchases}
+    return _github_put_file(
+        "data/purchases.json",
+        content,
+        sha=sha,
+        message=f"更新進貨記錄 ({len(purchases)} 筆)"
+    )
+
+
+# ─── 本地暫存資料（目標價、群組 ID） ─────────────────────────────────────────
+
 def load_data():
-    """讀取本地設定資料"""
+    """讀取本地設定資料（目標價、群組 ID）"""
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -44,6 +124,8 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False, indent=4)
 
 
+# ─── 台銀金價爬取 ─────────────────────────────────────────────────────────────
+
 def get_buy_back_price():
     """爬取台銀黃金存摺當前本行買入價（回售價，新台幣/公克）"""
     url = "https://rate.bot.com.tw/gold?Lang=zh-TW"
@@ -56,7 +138,6 @@ def get_buy_back_price():
         soup = BeautifulSoup(response.text, "html.parser")
         prices = soup.find_all("td", class_="text-right")
         if len(prices) >= 2:
-            # 第二個為本行買入價（回售價）
             raw = prices[1].text.replace(',', '').replace('\r', '').replace('\n', '').strip()
             number_part = raw.split()[0] if raw.split() else raw
             return int(number_part)
@@ -77,9 +158,7 @@ def get_current_price():
         soup = BeautifulSoup(response.text, "html.parser")
         prices = soup.find_all("td", class_="text-right")
         if len(prices) >= 1:
-            # 取第一個（本行賣出價），清除換行、空白及非數字字元
             raw = prices[0].text.replace(',', '').replace('\r', '').replace('\n', '').strip()
-            # 只取第一組數字（去除「買進」等說明文字）
             number_part = raw.split()[0] if raw.split() else raw
             return int(number_part)
     except Exception as e:
@@ -93,7 +172,6 @@ def get_previous_close_from_history():
     tw_tz = pytz.timezone('Asia/Taipei')
     today_str = datetime.now(tw_tz).strftime("%Y-%m-%d")
 
-    # 找最近一筆不是今天的記錄
     for record in reversed(history):
         if record.get('date') != today_str:
             return record.get('date'), record.get('sell_price')
@@ -106,14 +184,12 @@ def record_today_price(price):
     today_str = datetime.now(tw_tz).strftime("%Y-%m-%d")
     history = load_history()
 
-    # 若今日已有記錄，更新它
     for record in history:
         if record.get('date') == today_str:
             record['sell_price'] = price
             save_history(history)
             return
 
-    # 新增今日記錄
     history.append({'date': today_str, 'sell_price': price})
     save_history(history)
 
@@ -126,6 +202,8 @@ def get_history_prices(days=5):
         results.append((record.get('date'), record.get('sell_price')))
     return results
 
+
+# ─── Line Bot 訊息發送 ────────────────────────────────────────────────────────
 
 def send_line_message(to_id, text):
     """透過 Line Bot API 發送訊息"""
@@ -148,11 +226,12 @@ def send_line_message(to_id, text):
         print(f"[錯誤] 發送訊息時發生例外: {e}")
 
 
+# ─── 每日報告 ─────────────────────────────────────────────────────────────────
+
 def build_daily_report():
     """組合每日金價報告訊息"""
     current_price = get_current_price()
 
-    # 優先使用環境變數中的目標價格，其次使用 data.json 中的設定
     data = load_data()
     if TARGET_PRICE_ENV:
         try:
@@ -165,10 +244,7 @@ def build_daily_report():
     if not current_price:
         return "無法取得金價資料，請稍後再試。"
 
-    # 記錄今日金價
     record_today_price(current_price)
-
-    # 取得昨日收盤價
     prev_date, prev_price = get_previous_close_from_history()
 
     tw_tz = pytz.timezone('Asia/Taipei')
@@ -207,7 +283,7 @@ def build_daily_report():
 
 
 def run_daily_notify():
-    """執行每日下午 3 點的通知（由 GitHub Actions 呼叫）"""
+    """執行每日通知"""
     print("[開始] 執行每日黃金價格通知...")
 
     if not LINE_CHANNEL_ACCESS_TOKEN:
@@ -220,13 +296,11 @@ def run_daily_notify():
     data = load_data()
     group_ids = data.get('group_ids', [])
 
-    # 若有設定環境變數中的 Group ID，也加入推播清單
     if LINE_GROUP_ID and LINE_GROUP_ID not in group_ids:
         group_ids.append(LINE_GROUP_ID)
 
     if not group_ids:
         print("[警告] 尚未設定任何群組 ID，無法推播通知。")
-        print("[提示] 請先在 Line 群組中對 Bot 傳送任意訊息，系統將自動記錄群組 ID。")
         return
 
     for gid in group_ids:

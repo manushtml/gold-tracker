@@ -15,6 +15,8 @@ from gold_tracker_bot import (
     get_history_prices,
     load_data,
     save_data,
+    load_purchases,
+    save_purchases,
     send_line_message,
     build_daily_report,
     run_daily_notify
@@ -58,8 +60,7 @@ def reply_message(reply_token: str, text: str):
 
 def build_portfolio_report(sell_price, buy_back_price):
     """計算並組合持倉報告（損益以本行買入價/回售價計算）"""
-    data = load_data()
-    purchases = data.get('purchases', [])
+    purchases = load_purchases()
 
     if not purchases:
         return (
@@ -71,12 +72,10 @@ def build_portfolio_report(sell_price, buy_back_price):
             "例：/buy 4500 10"
         )
 
-    # 計算總持倉
     total_grams = sum(p['grams'] for p in purchases)
     total_cost = sum(p['price'] * p['grams'] for p in purchases)
     avg_cost = total_cost / total_grams if total_grams > 0 else 0
 
-    # 損益以本行買入價（回售價）計算——代表現在賣出能拿到的金額
     buyback_value = buy_back_price * total_grams
     profit = buyback_value - total_cost
     profit_rate = (profit / total_cost * 100) if total_cost > 0 else 0
@@ -113,7 +112,6 @@ def handle_text_message(event: dict):
     source = event.get('source', {})
     source_type = source.get('type', '')
 
-    # 取得來源 ID（群組優先，其次是用戶）
     if source_type == 'group':
         source_id = source.get('groupId', '')
     elif source_type == 'room':
@@ -121,7 +119,6 @@ def handle_text_message(event: dict):
     else:
         source_id = source.get('userId', '')
 
-    # 自動記錄群組 ID，供每日推播使用
     if source_id:
         data = load_data()
         group_ids = data.get('group_ids', [])
@@ -133,7 +130,6 @@ def handle_text_message(event: dict):
 
     reply_text = ""
 
-    # 指令：查詢狀態
     if text in ['/status', '查詢狀態', '/狀態']:
         data = load_data()
         target_price = data.get('target_price', 3500)
@@ -150,7 +146,6 @@ def handle_text_message(event: dict):
         else:
             reply_text += "（無法取得即時價格）"
 
-    # 指令：設定目標價格
     elif text.startswith('/set_price ') or text.startswith('設定目標價格 '):
         try:
             parts = text.split()
@@ -166,7 +161,6 @@ def handle_text_message(event: dict):
         except (IndexError, ValueError):
             reply_text = "格式錯誤，請使用：\n/set_price 2600\n或\n設定目標價格 2600"
 
-    # 指令：查詢即時金價
     elif text in ['/price', '查詢金價', '/金價']:
         current_price = get_current_price()
         if current_price:
@@ -181,7 +175,6 @@ def handle_text_message(event: dict):
         else:
             reply_text = "無法取得當前金價，請稍後再試。"
 
-    # 指令：查詢歷史金價
     elif text in ['/history', '查詢歷史', '/歷史']:
         history = get_history_prices(days=5)
         if history:
@@ -192,11 +185,10 @@ def handle_text_message(event: dict):
         else:
             reply_text = "無法取得歷史金價，請稍後再試。"
 
-    # 指令：今日完整報告
     elif text in ['/report', '今日報告', '/報告']:
         reply_text = build_daily_report()
 
-    # 指令：記錄進貨
+    # 指令：記錄進貨（改用 GitHub 持久化儲存）
     elif text.startswith('/buy ') or text.startswith('進貨 '):
         try:
             parts = text.split()
@@ -210,28 +202,32 @@ def handle_text_message(event: dict):
             tw_tz = pytz.timezone('Asia/Taipei')
             date_str = datetime.now(tw_tz).strftime("%Y-%m-%d")
 
-            data = load_data()
-            purchases = data.get('purchases', [])
+            purchases = load_purchases()
             purchases.append({
                 'date': date_str,
                 'price': unit_price,
                 'grams': grams,
                 'total': unit_price * grams
             })
-            data['purchases'] = purchases
-            save_data(data)
+            ok = save_purchases(purchases)
 
             total_cost = unit_price * grams
-            reply_text = (
-                f"✅ 進貨記錄已新增！\n"
-                f"─────────────────\n"
-                f"日期：{date_str}\n"
-                f"單價：{unit_price:,.0f} 元/公克\n"
-                f"數量：{grams:.2f} 公克\n"
-                f"總金額：{total_cost:,.0f} 元\n"
-                f"─────────────────\n"
-                f"輸入 /portfolio 查看持倉報告"
-            )
+            if ok:
+                reply_text = (
+                    f"✅ 進貨記錄已新增！\n"
+                    f"─────────────────\n"
+                    f"日期：{date_str}\n"
+                    f"單價：{unit_price:,.0f} 元/公克\n"
+                    f"數量：{grams:.2f} 公克\n"
+                    f"總金額：{total_cost:,.0f} 元\n"
+                    f"─────────────────\n"
+                    f"輸入 /portfolio 查看持倉報告"
+                )
+            else:
+                reply_text = (
+                    f"⚠️ 進貨記錄已暫存，但儲存到 GitHub 失敗。\n"
+                    f"請確認 GITHUB_TOKEN 環境變數是否正確設定。"
+                )
         except (IndexError, ValueError):
             reply_text = (
                 "格式錯誤，請使用：\n"
@@ -250,10 +246,9 @@ def handle_text_message(event: dict):
         else:
             reply_text = "無法取得當前金價，請稍後再試。"
 
-    # 指令：查詢進貨記錄
+    # 指令：查詢進貨記錄（改用 GitHub 持久化儲存）
     elif text in ['/buys', '/進貨記錄', '進貨記錄']:
-        data = load_data()
-        purchases = data.get('purchases', [])
+        purchases = load_purchases()
         if not purchases:
             reply_text = "尚無進貨記錄。\n\n使用 /buy [單價] [公克數] 新增。"
         else:
@@ -266,26 +261,23 @@ def handle_text_message(event: dict):
                 )
             total_grams = sum(p['grams'] for p in purchases)
             total_cost = sum(p['price'] * p['grams'] for p in purchases)
-            reply_text += f"─────────────────\n"
+            reply_text += "─────────────────\n"
             reply_text += f"合計：{total_grams:.2f} 公克 / {total_cost:,.0f} 元"
 
-    # 指令：刪除最後一筆進貨記錄
+    # 指令：刪除最後一筆進貨記錄（改用 GitHub 持久化儲存）
     elif text in ['/buy_undo', '/刪除進貨', '刪除最後進貨']:
-        data = load_data()
-        purchases = data.get('purchases', [])
+        purchases = load_purchases()
         if not purchases:
             reply_text = "尚無進貨記錄可刪除。"
         else:
             removed = purchases.pop()
-            data['purchases'] = purchases
-            save_data(data)
+            save_purchases(purchases)
             reply_text = (
                 f"已刪除最後一筆進貨記錄：\n"
                 f"{removed['date']} / "
                 f"{removed['price']:,.0f} 元/公克 × {removed['grams']:.2f} 公克"
             )
 
-    # 指令：說明
     elif text in ['/help', '說明', '/指令']:
         reply_text = (
             "【黃金追蹤小幫手指令說明】\n"
@@ -359,7 +351,6 @@ def health():
 def start_scheduler():
     """啟動內建排程器，每天台灣時間中午 12:00（UTC 04:00）自動發送通知"""
     scheduler = BackgroundScheduler(timezone=pytz.utc)
-    # 每天 UTC 04:00 = 台灣時間 12:00，週一至週五
     scheduler.add_job(
         func=run_daily_notify,
         trigger=CronTrigger(hour=4, minute=0, day_of_week='mon-fri', timezone=pytz.utc),
@@ -372,7 +363,6 @@ def start_scheduler():
     return scheduler
 
 
-# 啟動排程器（在 gunicorn 環境中也能正常運作）
 scheduler = start_scheduler()
 
 
